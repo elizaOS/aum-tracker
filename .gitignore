@@ -19,3 +19,4 @@ data/*.db-wal
 
 # logs
 *.log
+/data

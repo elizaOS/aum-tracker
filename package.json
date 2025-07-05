@@ -11,6 +11,11 @@
     "prefetch:test10": "bun run src/scripts/prefetch.ts run --limit 10",
     "prefetch:test-force": "bun run src/scripts/prefetch.ts run --limit 5 --force-refresh",
     "db:cleanup": "bun run src/scripts/prefetch.ts run --batch-size 1",
+    "token-metadata:start": "bun run src/scripts/token-metadata-service.ts start",
+    "token-metadata:refresh": "bun run src/scripts/token-metadata-service.ts refresh",
+    "token-metadata:health": "bun run src/scripts/token-metadata-service.ts health",
+    "token-metadata:queue": "bun run src/scripts/token-metadata-service.ts queue",
+    "token-metadata:clear": "bun run src/scripts/token-metadata-service.ts clear",
     "test": "echo 'No tests configured yet'"
   },
   "dependencies": {

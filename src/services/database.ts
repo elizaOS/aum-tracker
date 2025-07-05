@@ -21,17 +21,18 @@ export interface TokenPrice {
   market_cap?: number;
   image_url?: string;
   last_updated: string;
-  source: "jupiter" | "coingecko" | "fallback";
+  source: "jupiter" | "coingecko" | "fallback" | "jupiter-metadata";
 }
 
 export interface FetchLog {
   id?: number;
   wallet_address: string;
   timestamp: string;
-  operation: "balance" | "tokens" | "prices";
+  operation: "balance" | "tokens" | "prices" | "token-metadata";
   status: "success" | "error" | "timeout";
   error_details?: string;
   response_time_ms: number;
+  details?: string;
 }
 
 export interface SystemMetric {
@@ -128,10 +129,17 @@ export class DatabaseService {
         source TEXT NOT NULL DEFAULT 'jupiter'
       )
     `);
-    
+
     // Add image_url column if it doesn't exist (migration)
     try {
       this.db.exec(`ALTER TABLE token_prices ADD COLUMN image_url TEXT`);
+    } catch (e) {
+      // Column already exists, ignore error
+    }
+
+    // Add details column to fetch_logs if it doesn't exist (migration)
+    try {
+      this.db.exec(`ALTER TABLE fetch_logs ADD COLUMN details TEXT`);
     } catch (e) {
       // Column already exists, ignore error
     }
@@ -146,6 +154,7 @@ export class DatabaseService {
         status TEXT NOT NULL,
         error_details TEXT,
         response_time_ms INTEGER NOT NULL,
+        details TEXT,
         FOREIGN KEY (wallet_address) REFERENCES wallet_balances(wallet_address)
       )
     `);
@@ -485,15 +494,17 @@ export class DatabaseService {
         console.error("Error parsing tokens JSON:", error);
       }
     }
-    
+
     // Get SOL price to calculate total USD value
     const SOL_MINT = "So11111111111111111111111111111111111111112";
     const solPriceStmt = this.db.prepare(`
       SELECT price FROM token_prices WHERE mint = ?
     `);
-    const solPriceResult = solPriceStmt.get(SOL_MINT) as { price: number } | null;
+    const solPriceResult = solPriceStmt.get(SOL_MINT) as {
+      price: number;
+    } | null;
     const solPrice = solPriceResult?.price || 150; // Fallback to $150
-    
+
     // Calculate total USD value including SOL
     const totalSOLValue = (result.totalSOL || 0) * solPrice;
     const totalUSDValue = totalSOLValue + totalTokenUSDValue;

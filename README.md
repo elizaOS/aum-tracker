@@ -62,37 +62,74 @@ PORT=3000
 
 ## Usage
 
-### Development
+### Command Breakdown
 
-Start the development server with hot reload:
+**Web Server Commands** (API endpoints)
 ```bash
-bun run dev
+bun run dev      # Starts development server with hot reload (port 3000)
+bun run start    # Starts production server (port 3000)
 ```
+These start the **Hono web server** that serves the API endpoints.
 
-Open http://localhost:3000 to view the dashboard.
-
-### Data Population
-
-Before using the dashboard, populate the database with wallet data:
-
+**Data Prefetch Commands** (populate database)
 ```bash
-# Fetch all wallet data
-bun run prefetch
-
-# Test with limited wallets first
-bun run prefetch:test          # Test with 5 wallets
-bun run prefetch:test10        # Test with 10 wallets
-bun run prefetch:test-force    # Test with 5 wallets + force refresh
-
-# Force refresh all data
-bun run prefetch:force
-
-# Check system health
-bun run prefetch:health
-
-# Database maintenance
-bun run db:cleanup             # Cleanup database with batch processing
+bun run prefetch              # Fetches wallet data from blockchain
+bun run prefetch:force        # Force refresh all wallet data
+bun run prefetch:test         # Test with 5 wallets
+bun run prefetch:test10       # Test with 10 wallets
+bun run prefetch:test-force   # Test with 5 wallets + force refresh
+bun run prefetch:health       # Check system health
+bun run db:cleanup            # Database cleanup with batch processing
 ```
+These run the **data prefetch script** that reads wallet addresses from CSV, fetches balance data from Solana blockchain, and populates the SQLite database.
+
+**Token Metadata Service** (background processing)
+```bash
+bun run token-metadata:start   # Starts continuous background service
+bun run token-metadata:refresh # One-time metadata refresh
+bun run token-metadata:health  # Check metadata service health
+bun run token-metadata:queue   # Show metadata queue status
+bun run token-metadata:clear   # Clear metadata queue
+```
+These manage the **background token metadata service** that processes tokens one at a time to respect Jupiter API rate limits.
+
+### Typical Workflow
+
+1. **First time setup** - Populate database with wallet data:
+   ```bash
+   # Test with a few wallets first
+   bun run prefetch:test
+   
+   # Then fetch all wallet data
+   bun run prefetch
+   ```
+
+2. **Start the web server**:
+   ```bash
+   # Development (with hot reload)
+   bun run dev
+   
+   # OR Production
+   bun run start
+   ```
+
+3. **Optional: Start background metadata service** (in a separate terminal):
+   ```bash
+   bun run token-metadata:start
+   ```
+
+4. **View the dashboard**: Open http://localhost:3000
+
+### What Each Process Does
+
+| Command | Purpose | Runs Once | Continuous |
+|---------|---------|-----------|------------|
+| `bun run dev` | Web server with hot reload | ❌ | ✅ |
+| `bun run start` | Production web server | ❌ | ✅ |
+| `bun run prefetch` | Fetch wallet data | ✅ | ❌ |
+| `bun run token-metadata:start` | Background metadata service | ❌ | ✅ |
+
+**Important**: The **prefetch needs to be run first** to populate the database, then you can start the web server to access the API endpoints.
 
 ### Production
 
@@ -209,6 +246,13 @@ bun run prefetch:test10        # Test with 10 wallets
 bun run prefetch:test-force    # Test with 5 wallets + force refresh
 bun run prefetch:health        # Check system health
 bun run db:cleanup             # Database cleanup with batch processing
+
+# Token Metadata Management
+bun run token-metadata:start   # Start continuous token metadata service
+bun run token-metadata:refresh # Refresh stale metadata once
+bun run token-metadata:health  # Check metadata service health
+bun run token-metadata:queue   # Show metadata queue status
+bun run token-metadata:clear   # Clear metadata queue
 
 # Testing
 bun run test                   # Run tests (not configured yet)

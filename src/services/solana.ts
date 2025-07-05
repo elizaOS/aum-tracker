@@ -1,6 +1,7 @@
 import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
 import { db, TokenPrice } from "./database";
+import tokenMetadataService from "./background/token-metadata";
 
 export interface TokenAccount {
   mint: string;
@@ -254,97 +255,45 @@ export class SolanaService {
     }
   }
 
-  // Get token metadata from Jupiter Token API
-  public async getTokenMetadata(
-    mints: string[],
-  ): Promise<{ [mint: string]: { symbol: string; name: string; logoURI?: string } }> {
+  // Get token metadata from cache or queue for background fetching
+  public async getTokenMetadata(mints: string[]): Promise<{
+    [mint: string]: { symbol: string; name: string; logoURI?: string };
+  }> {
     if (mints.length === 0) return {};
 
-    const metadata: { [mint: string]: { symbol: string; name: string; logoURI?: string } } = {};
+    const metadata: {
+      [mint: string]: { symbol: string; name: string; logoURI?: string };
+    } = {};
 
-    // Try to fetch all tokens at once first
-    try {
-      const response = await fetch(this.jupiterTokensApiUrl);
-      
-      if (response.ok) {
-        const allTokens = await response.json();
-        
-        // Create a map of mint to token data
-        const tokenMap = new Map();
-        for (const token of allTokens) {
-          tokenMap.set(token.address, {
-            symbol: token.symbol || "Unknown",
-            name: token.name || "Unknown Token",
-            logoURI: token.logoURI || null,
-          });
-        }
-        
-        // Extract metadata for requested mints
-        for (const mint of mints) {
-          const tokenData = tokenMap.get(mint);
-          if (tokenData) {
-            metadata[mint] = tokenData;
-          } else {
-            // Default for unknown tokens
-            metadata[mint] = {
-              symbol: "Unknown",
-              name: "Unknown Token",
-              logoURI: null,
-            };
-          }
-        }
-        
-        return metadata;
+    const missingTokens: string[] = [];
+
+    // Check cache first
+    for (const mint of mints) {
+      const cachedToken = db.getTokenPrice(mint);
+      if (
+        cachedToken &&
+        cachedToken.symbol &&
+        cachedToken.symbol !== "Unknown"
+      ) {
+        metadata[mint] = {
+          symbol: cachedToken.symbol,
+          name: cachedToken.name || "Unknown Token",
+          logoURI: cachedToken.image_url || undefined,
+        };
+      } else {
+        // Set default metadata for immediate use
+        metadata[mint] = {
+          symbol: "Unknown",
+          name: "Unknown Token",
+          logoURI: undefined,
+        };
+        missingTokens.push(mint);
       }
-    } catch (error) {
-      console.warn("Failed to fetch bulk token list, falling back to individual requests:", error);
     }
 
-    // Fallback: Process tokens individually
-    const batchSize = 10;
-    for (let i = 0; i < mints.length; i += batchSize) {
-      const batch = mints.slice(i, i + batchSize);
-
-      const promises = batch.map(async (mint) => {
-        try {
-          const response = await fetch(
-            `${this.jupiterTokensApiUrl}/token/${mint}`,
-          );
-
-          if (!response.ok) {
-            console.warn(
-              `Failed to fetch metadata for token ${mint}: ${response.status}`,
-            );
-            return { mint, data: null };
-          }
-
-          const data = await response.json();
-          return {
-            mint,
-            data: {
-              symbol: data.symbol || "Unknown",
-              name: data.name || "Unknown Token",
-              logoURI: data.logoURI || null,
-            },
-          };
-        } catch (error) {
-          console.warn(`Error fetching metadata for token ${mint}:`, error);
-          return { mint, data: null };
-        }
-      });
-
-      const results = await Promise.allSettled(promises);
-
-      results.forEach((result) => {
-        if (result.status === "fulfilled" && result.value.data) {
-          metadata[result.value.mint] = result.value.data;
-        }
-      });
-
-      // Small delay between batches to avoid rate limiting
-      if (i + batchSize < mints.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
+    // Queue missing tokens for background fetching with high priority
+    if (missingTokens.length > 0) {
+      tokenMetadataService.addBatchToQueue(missingTokens, 10); // High priority
     }
 
     return metadata;
@@ -353,17 +302,19 @@ export class SolanaService {
   // Get SOL price from Jupiter API
   public async getSOLPrice(): Promise<number> {
     const SOL_MINT = "So11111111111111111111111111111111111111112";
-    
+
     try {
-      const response = await fetch(`${this.jupiterApiUrl}?ids=${SOL_MINT}`);
-      
-      if (!response.ok) {
-        throw new Error(`Jupiter API error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      const solPrice = parseFloat(data.data?.[SOL_MINT]?.price || "0");
-      
+      const solPrice = await this.withRetry(async () => {
+        const response = await fetch(`${this.jupiterApiUrl}?ids=${SOL_MINT}`);
+
+        if (!response.ok) {
+          throw new Error(`Jupiter API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return parseFloat(data.data?.[SOL_MINT]?.price || "0");
+      });
+
       // Store SOL price in database
       if (solPrice > 0) {
         db.upsertTokenPrice({
@@ -373,17 +324,18 @@ export class SolanaService {
           price: solPrice,
           price_change_24h: undefined,
           market_cap: undefined,
-          image_url: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+          image_url:
+            "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
           last_updated: new Date().toISOString(),
           source: "jupiter",
         });
       }
-      
+
       return solPrice;
     } catch (error) {
       console.error("Error fetching SOL price:", error);
       // Return cached price if available
-      const cached = db.getAllTokenPrices().find(p => p.mint === SOL_MINT);
+      const cached = db.getAllTokenPrices().find((p) => p.mint === SOL_MINT);
       return cached?.price || 150; // Fallback to $150
     }
   }
@@ -397,17 +349,21 @@ export class SolanaService {
     try {
       // Always include SOL in price fetches
       const SOL_MINT = "So11111111111111111111111111111111111111112";
-      const mintsWithSol = [...new Set([...mints, SOL_MINT])];
-      
-      // Fetch prices and metadata in parallel
+      const mintsWithSol = Array.from(new Set([...mints, SOL_MINT]));
+
+      // Fetch prices with retry, get metadata from cache/queue
       const [pricesResponse, metadata] = await Promise.all([
-        fetch(`${this.jupiterApiUrl}?ids=${mintsWithSol.join(",")}`),
+        this.withRetry(async () => {
+          const response = await fetch(
+            `${this.jupiterApiUrl}?ids=${mintsWithSol.join(",")}`,
+          );
+          if (!response.ok) {
+            throw new Error(`Jupiter API error: ${response.status}`);
+          }
+          return response;
+        }),
         this.getTokenMetadata(mintsWithSol),
       ]);
-
-      if (!pricesResponse.ok) {
-        throw new Error(`Jupiter API error: ${pricesResponse.status}`);
-      }
 
       const pricesData = await pricesResponse.json();
       const prices: PriceData = {};
@@ -616,9 +572,15 @@ export class SolanaService {
 
       // Test Jupiter API
       const jupiterStartTime = Date.now();
-      const jupiterResponse = await fetch(
-        `${this.jupiterApiUrl}?ids=So11111111111111111111111111111111111111112`,
-      );
+      const jupiterResponse = await this.withRetry(async () => {
+        const response = await fetch(
+          `${this.jupiterApiUrl}?ids=So11111111111111111111111111111111111111112`,
+        );
+        if (!response.ok) {
+          throw new Error(`Jupiter API error: ${response.status}`);
+        }
+        return response;
+      });
       const jupiterResponseTime = Date.now() - jupiterStartTime;
 
       return {

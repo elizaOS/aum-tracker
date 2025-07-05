@@ -89,9 +89,9 @@ class PrefetchService {
         : 0;
 
     console.log(
-      `📊 Progress: ${this.stats.processed}/${this.stats.totalWallets} (${progress.toFixed(1)}%) | ` +
-        `✅ Success: ${this.stats.successful} | ❌ Failed: ${this.stats.failed} | ⏭️ Skipped: ${this.stats.skipped} | ` +
-        `📈 Rate: ${rate.toFixed(2)}/s | ⏱️ ETA: ${Math.round(eta)}s`,
+      `   📊 ${this.stats.processed}/${this.stats.totalWallets} (${progress.toFixed(1)}%) | ` +
+        `✅ ${this.stats.successful} | ❌ ${this.stats.failed} | ⏭️ ${this.stats.skipped} | ` +
+        `📈 ${rate.toFixed(2)}/s | ⏱️ ${Math.round(eta)}s remaining`,
     );
   }
 
@@ -278,9 +278,14 @@ class PrefetchService {
 
         const batch = wallets.slice(i, i + this.config.batchSize);
 
+        const batchNum = Math.floor(i / this.config.batchSize) + 1;
+        const totalBatches = Math.ceil(wallets.length / this.config.batchSize);
+
+        console.log(`\n${"─".repeat(60)}`);
         console.log(
-          `🔄 Processing batch ${Math.floor(i / this.config.batchSize) + 1}/${Math.ceil(wallets.length / this.config.batchSize)} (${batch.length} wallets)`,
+          `🔄 Batch ${batchNum}/${totalBatches} - Processing ${batch.length} wallets`,
         );
+        console.log(`${"─".repeat(60)}`);
 
         await this.processWalletBatch(batch);
         this.printProgress();
@@ -288,7 +293,7 @@ class PrefetchService {
         // Delay between batches (except for the last batch)
         if (i + this.config.batchSize < wallets.length && !this.shouldStop) {
           console.log(
-            `⏸️ Waiting ${this.config.delayBetweenBatches}ms before next batch...`,
+            `   ⏸️ Batch complete, waiting ${this.config.delayBetweenBatches}ms...`,
           );
           await new Promise((resolve) =>
             setTimeout(resolve, this.config.delayBetweenBatches),
