@@ -1,0 +1,21 @@
+# deps
+node_modules/
+
+# environment
+.env
+.env.local
+.env.production
+
+# database
+*.db
+*.db-shm
+*.db-wal
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# macOS
+.DS_Store
+
+# logs
+*.log
