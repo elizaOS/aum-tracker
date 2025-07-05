@@ -495,7 +495,7 @@ api.get("/tokens/aggregated", async (c) => {
       }
     }
 
-    // Add price data
+    // Add price data and update metadata from current token_prices table
     const priceMap = new Map(tokenPrices.map((p) => [p.mint, p]));
     for (const [mint, token] of tokenMap) {
       const priceData = priceMap.get(mint);
@@ -503,6 +503,9 @@ api.get("/tokens/aggregated", async (c) => {
         token.price = priceData.price;
         token.priceChange24h = priceData.price_change_24h || 0;
         token.imageUrl = priceData.image_url || null;
+        // Update symbol and name with current metadata from token_prices table
+        token.symbol = priceData.symbol || token.symbol;
+        token.name = priceData.name || token.name;
       }
     }
 
