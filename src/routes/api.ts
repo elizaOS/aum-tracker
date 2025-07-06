@@ -5,8 +5,12 @@ import { db } from "../services/database";
 import { solanaService } from "../services/solana";
 import { csvService } from "../services/csv";
 import tokenMetadataService from "../services/background/token-metadata";
+import { PrefetchService } from "../scripts/prefetch";
 
 const api = new Hono();
+
+// Global prefetch service instance to track running state
+let globalPrefetchService: PrefetchService | null = null;
 
 // Middleware
 api.use("*", cors());
@@ -717,12 +721,66 @@ api.get("/tokens/metadata/health", async (c) => {
 // Admin endpoints
 api.post("/admin/refresh", async (c) => {
   try {
-    // This would trigger a full data refresh
-    // For now, just return a success message
+    // Check if refresh is already running
+    if (globalPrefetchService) {
+      return c.json(
+        {
+          success: false,
+          message: "Background refresh is already running",
+          timestamp: new Date().toISOString(),
+        },
+        409,
+      );
+    }
+
+    // Parse query parameters
+    const forceRefresh = c.req.query("force") === "true";
+    const limitParam = c.req.query("limit");
+    const limit = limitParam ? parseInt(limitParam) : undefined;
+
+    // Start refresh process in background
+    const refreshConfig = {
+      forceRefresh,
+      limit,
+      resumeFromFailures: !forceRefresh,
+    };
+
+    globalPrefetchService = new PrefetchService(refreshConfig);
+
+    // Run refresh in background without blocking the response
+    (async () => {
+      try {
+        await globalPrefetchService!.run();
+      } catch (error) {
+        console.error("Background refresh failed:", error);
+      } finally {
+        // Clear the global service when done
+        globalPrefetchService = null;
+      }
+    })();
 
     return c.json({
       success: true,
       message: "Full data refresh initiated",
+      config: refreshConfig,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    return handleError(error, c);
+  }
+});
+
+// Admin refresh status endpoint
+api.get("/admin/refresh/status", async (c) => {
+  try {
+    const isRunning = globalPrefetchService !== null;
+
+    return c.json({
+      success: true,
+      isRunning,
+      message: isRunning
+        ? "Background refresh is running"
+        : "No refresh currently running",
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
