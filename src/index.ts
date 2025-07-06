@@ -9,6 +9,7 @@ import { ModernLayout } from "./components/ModernLayout";
 import { ModernDashboard } from "./components/ModernDashboard";
 import { WalletDetail } from "./components/WalletDetail";
 import { TokenDetail } from "./components/TokenDetail";
+import { PrefetchService } from "./scripts/prefetch";
 
 const app = new Hono();
 
@@ -102,5 +103,29 @@ app.onError((err, c) => {
     }),
   );
 });
+
+// Auto-prefetch on startup (full refresh)
+async function startupPrefetch() {
+  console.log("🚀 Starting full prefetch on server startup...");
+
+  try {
+    // Create prefetch service with full startup configuration
+    const prefetchService = new PrefetchService({
+      forceRefresh: true, // Always force refresh on startup for fresh data
+      resumeFromFailures: true, // Resume from any previous failures
+      // No limit - process all wallets on startup
+    });
+
+    // Run prefetch in background without blocking server start
+    prefetchService.run().catch((error) => {
+      console.error("❌ Startup prefetch failed:", error);
+    });
+  } catch (error) {
+    console.error("❌ Failed to start auto-prefetch:", error);
+  }
+}
+
+// Start prefetch after a longer delay to allow server to fully initialize
+setTimeout(startupPrefetch, 5000);
 
 export default app;
