@@ -9,24 +9,8 @@ import { PrefetchService } from "../scripts/prefetch";
 
 const api = new Hono();
 
-// Simple job tracking for refresh operations
-interface RefreshJob {
-  id: string;
-  status: "running" | "completed" | "failed";
-  startTime: Date;
-  endTime?: Date;
-  progress?: {
-    totalWallets: number;
-    processed: number;
-    successful: number;
-    failed: number;
-    skipped: number;
-  };
-  error?: string;
-}
-
-// In-memory job store (for simplicity - could be moved to database for persistence)
-const refreshJobs = new Map<string, RefreshJob>();
+// Global prefetch service instance to track running state
+let globalPrefetchService: PrefetchService | null = null;
 
 // Middleware
 api.use("*", cors());
@@ -737,22 +721,22 @@ api.get("/tokens/metadata/health", async (c) => {
 // Admin endpoints
 api.post("/admin/refresh", async (c) => {
   try {
+    // Check if refresh is already running
+    if (globalPrefetchService) {
+      return c.json(
+        {
+          success: false,
+          message: "Background refresh is already running",
+          timestamp: new Date().toISOString(),
+        },
+        409,
+      );
+    }
+
     // Parse query parameters
     const forceRefresh = c.req.query("force") === "true";
     const limitParam = c.req.query("limit");
     const limit = limitParam ? parseInt(limitParam) : undefined;
-
-    // Generate job ID
-    const jobId = `refresh_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    // Create job tracking entry
-    const job: RefreshJob = {
-      id: jobId,
-      status: "running",
-      startTime: new Date(),
-    };
-
-    refreshJobs.set(jobId, job);
 
     // Start refresh process in background
     const refreshConfig = {
@@ -761,67 +745,23 @@ api.post("/admin/refresh", async (c) => {
       resumeFromFailures: !forceRefresh,
     };
 
-    const prefetchService = new PrefetchService(refreshConfig);
+    globalPrefetchService = new PrefetchService(refreshConfig);
 
     // Run refresh in background without blocking the response
     (async () => {
       try {
-        // Create a custom prefetch service that updates our job status
-        const originalRun = prefetchService.run.bind(prefetchService);
-
-        // Override run method to track progress
-        prefetchService.run = async function () {
-          const statsInterval = setInterval(() => {
-            const currentJob = refreshJobs.get(jobId);
-            if (currentJob && currentJob.status === "running") {
-              // Update progress if available (accessing private stats)
-              currentJob.progress = {
-                totalWallets: (this as any).stats?.totalWallets || 0,
-                processed: (this as any).stats?.processed || 0,
-                successful: (this as any).stats?.successful || 0,
-                failed: (this as any).stats?.failed || 0,
-                skipped: (this as any).stats?.skipped || 0,
-              };
-              refreshJobs.set(jobId, currentJob);
-            }
-          }, 2000); // Update every 2 seconds
-
-          try {
-            await originalRun();
-
-            // Mark job as completed
-            const completedJob = refreshJobs.get(jobId);
-            if (completedJob) {
-              completedJob.status = "completed";
-              completedJob.endTime = new Date();
-              refreshJobs.set(jobId, completedJob);
-            }
-          } catch (error) {
-            // Mark job as failed
-            const failedJob = refreshJobs.get(jobId);
-            if (failedJob) {
-              failedJob.status = "failed";
-              failedJob.endTime = new Date();
-              failedJob.error =
-                error instanceof Error ? error.message : "Unknown error";
-              refreshJobs.set(jobId, failedJob);
-            }
-            throw error;
-          } finally {
-            clearInterval(statsInterval);
-          }
-        };
-
-        await prefetchService.run();
+        await globalPrefetchService!.run();
       } catch (error) {
         console.error("Background refresh failed:", error);
+      } finally {
+        // Clear the global service when done
+        globalPrefetchService = null;
       }
     })();
 
     return c.json({
       success: true,
       message: "Full data refresh initiated",
-      jobId,
       config: refreshConfig,
       timestamp: new Date().toISOString(),
     });
@@ -831,79 +771,16 @@ api.post("/admin/refresh", async (c) => {
 });
 
 // Admin refresh status endpoint
-api.get("/admin/refresh/:jobId", async (c) => {
+api.get("/admin/refresh/status", async (c) => {
   try {
-    const jobId = c.req.param("jobId");
-    if (!jobId) {
-      return c.json(
-        {
-          success: false,
-          error: "Job ID is required",
-          timestamp: new Date().toISOString(),
-        },
-        400,
-      );
-    }
-    const job = refreshJobs.get(jobId);
-
-    if (!job) {
-      return c.json(
-        {
-          success: false,
-          error: "Job not found",
-          timestamp: new Date().toISOString(),
-        },
-        404,
-      );
-    }
+    const isRunning = globalPrefetchService !== null;
 
     return c.json({
       success: true,
-      job: {
-        id: job.id,
-        status: job.status,
-        startTime: job.startTime,
-        endTime: job.endTime,
-        progress: job.progress,
-        error: job.error,
-        duration: job.endTime
-          ? job.endTime.getTime() - job.startTime.getTime()
-          : Date.now() - job.startTime.getTime(),
-      },
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    return handleError(error, c);
-  }
-});
-
-// Admin refresh jobs list endpoint
-api.get("/admin/refresh", async (c) => {
-  try {
-    const limit = parseInt(c.req.query("limit") || "10");
-
-    // Get recent jobs (sorted by start time, most recent first)
-    const allJobs: RefreshJob[] = [];
-    for (const [, job] of Array.from(refreshJobs.entries())) {
-      allJobs.push(job);
-    }
-    const jobs = allJobs
-      .sort((a, b) => b.startTime.getTime() - a.startTime.getTime())
-      .slice(0, limit);
-
-    return c.json({
-      success: true,
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        status: job.status,
-        startTime: job.startTime,
-        endTime: job.endTime,
-        progress: job.progress,
-        error: job.error,
-        duration: job.endTime
-          ? job.endTime.getTime() - job.startTime.getTime()
-          : Date.now() - job.startTime.getTime(),
-      })),
+      isRunning,
+      message: isRunning
+        ? "Background refresh is running"
+        : "No refresh currently running",
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
