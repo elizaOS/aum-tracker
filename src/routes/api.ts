@@ -501,7 +501,7 @@ api.get("/tokens/aggregated", async (c) => {
 
     // Add price data and update metadata from current token_prices table
     const priceMap = new Map(tokenPrices.map((p) => [p.mint, p]));
-    for (const [mint, token] of Array.from(tokenMap.entries())) {
+    for (const [mint, token] of tokenMap) {
       const priceData = priceMap.get(mint);
       if (priceData) {
         token.price = priceData.price;
